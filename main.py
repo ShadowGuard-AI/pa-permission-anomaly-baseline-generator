@@ -2,6 +2,7 @@ import argparse
 import logging
 import json
 import os
+import sys
 from collections import defaultdict
 
 # Configure logging
@@ -72,7 +73,7 @@ def generate_baseline(log_file, role_attribute, user_attribute, resource_type_at
         dict: A dictionary representing the permission usage baseline.
     """
 
-    baseline = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(set))))
+    baseline = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
 
     try:
         with open(log_file, 'r') as f:
@@ -105,17 +106,47 @@ def main():
     # Validate input file path
     if not os.path.isfile(args.log_file):
         logging.error(f"Error: Log file '{args.log_file}' does not exist.")
-        return
+        sys.exit(1)
+
+    if os.path.realpath(args.output_file) == os.path.realpath(args.log_file):
+        logging.error("Error: Output file must not be the same as the log file.")
+        sys.exit(1)
 
     baseline = generate_baseline(args.log_file, args.role_attribute, args.user_attribute, args.resource_type_attribute, args.access_type_attribute, args.resource_attribute)
 
-    if baseline:
-        try:
-            with open(args.output_file, 'w') as outfile:
-                json.dump(baseline, outfile, indent=4)
-            logging.info(f"Permission baseline generated and saved to: {args.output_file}")
-        except Exception as e:
-            logging.error(f"Error writing to output file: {e}")
+    if baseline is None:
+        logging.error("Error: Could not read the log file.")
+        sys.exit(1)
+
+    recorded = sum(
+        len(resources)
+        for resource_types in baseline.values()
+        for access_types in resource_types.values()
+        for resources in access_types.values()
+    )
+
+    if recorded == 0:
+        logging.error("No usable log entries were recorded; no baseline was generated.")
+        sys.exit(1)
+
+    plain_baseline = {
+        role: {
+            resource_type: {
+                access_type: sorted(resources)
+                for access_type, resources in access_types.items()
+            }
+            for resource_type, access_types in resource_types.items()
+        }
+        for role, resource_types in baseline.items()
+    }
+
+    try:
+        with open(args.output_file, 'w') as outfile:
+            json.dump(plain_baseline, outfile, indent=4)
+    except Exception as e:
+        logging.error(f"Error writing to output file: {e}")
+        sys.exit(1)
+    logging.info(f"Permission baseline generated and saved to: {args.output_file} ({recorded} resources recorded)")
 
 
 if __name__ == "__main__":
