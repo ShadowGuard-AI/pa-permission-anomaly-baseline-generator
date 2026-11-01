@@ -45,10 +45,14 @@ def process_log_entry(log_entry, role_attribute, user_attribute, resource_type_a
         access_type = log_entry.get(access_type_attribute)
         resource = log_entry.get(resource_attribute)
 
+        # all() treats a real value of 0 or an empty string as missing. A log that uses numeric
+        # ids can lose perfectly valid lines to this check.
         if not all([role, user, resource_type, access_type, resource]):
             logging.warning(f"Skipping log entry due to missing attributes: {log_entry}")
             return None
 
+        # The user is extracted and checked here and then never used by the caller. The baseline
+        # is keyed by role alone, so a single odd user bends the whole role baseline.
         return role, user, resource_type, access_type, resource
 
     except Exception as e:
@@ -79,10 +83,14 @@ def generate_baseline(log_file, role_attribute, user_attribute, resource_type_at
         with open(log_file, 'r') as f:
             for line in f:
                 try:
+                    # One JSON object per line is the whole input contract. A pretty printed log, one
+                    # object spread over several lines, fails line after line here.
                     log_entry = json.loads(line.strip())
                     processed_entry = process_log_entry(log_entry, role_attribute, user_attribute, resource_type_attribute, access_type_attribute, resource_attribute)
                     if processed_entry:
                         role, user, resource_type, access_type, resource = processed_entry
+                        # A set of resources is all I keep. Counts are gone by construction, so a resource
+                        # seen once and one seen ten thousand times weigh the same in the baseline.
                         baseline[role][resource_type][access_type].add(resource)
                 except json.JSONDecodeError:
                     logging.warning(f"Skipping line due to invalid JSON format: {line.strip()}")
@@ -132,6 +140,8 @@ def main():
     plain_baseline = {
         role: {
             resource_type: {
+                # Sorting at this last step is what makes two runs over the same log produce the same
+                # file. The sets above carry no order worth keeping.
                 access_type: sorted(resources)
                 for access_type, resources in access_types.items()
             }
